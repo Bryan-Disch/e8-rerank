@@ -11,11 +11,33 @@ The E8 codes store the vector minus its bucket centre (the residual), after
 a fixed random rotation. Each level encodes what the previous levels missed.
 Nothing about the codebook is trained: only one scale per level is fitted.
 """
+import ctypes
+import glob
+import os
+
 import numpy as np
 import numba
 import faiss
 
 from .lattice import E8Codebook, score_aware_encode
+
+
+def _load_kernel():
+    """The compiled C kernel (built at install time), or None."""
+    here = os.path.dirname(__file__)
+    for path in glob.glob(os.path.join(here, "_kernel*.so")) + glob.glob(os.path.join(here, "_kernel*.dylib")):
+        try:
+            lib = ctypes.CDLL(path)
+        except OSError:
+            continue
+        P = ctypes.c_void_p
+        lib.e8_rerank.argtypes = [ctypes.c_int] * 6 + [P] * 7 + [ctypes.c_int, P, P]
+        lib.e8_rerank.restype = None
+        return lib
+    return None
+
+
+_KERNEL = _load_kernel()
 
 
 def _rotation(D, seed):
@@ -122,7 +144,7 @@ class E8RerankIndex:
         self.codes = np.concatenate([self.codes, new])
         self.assign = np.concatenate([self.assign, a])
 
-    def search(self, Q, k=10, nprobe=64, k1=300, levels=None):
+    def search(self, Q, k=10, nprobe=64, k1=300, levels=None, use_c=True):
         """Returns (scores, ids), each of shape (len(Q), k).
         ``levels`` < self.levels re-checks with only the first few levels."""
         L = self.levels if levels is None else levels
@@ -133,6 +155,18 @@ class E8RerankIndex:
         out_i = np.empty((len(Q), k), np.int64)
         scales = np.array([b.scale for b in self.books], np.float32)
         Qr = self._rot(Q)
+        if _KERNEL is not None and use_c:
+            if getattr(self, "_C2", None) is None:
+                # E8 points doubled are integers in -8..7: an int8 table, 512 KB
+                self._C2 = np.ascontiguousarray(np.round(self.books[0].C * 2), np.int8)
+            half = (scales / 2).astype(np.float32)
+            I = np.ascontiguousarray(I, np.int64)
+            _KERNEL.e8_rerank(len(Q), I.shape[1], self.D, L, self.levels, self.D // 8,
+                              Qr.ctypes.data, I.ctypes.data, self.cent.ctypes.data,
+                              self.assign.ctypes.data, self.codes.ctypes.data,
+                              self._C2.ctypes.data, half.ctypes.data, k,
+                              out_s.ctypes.data, out_i.ctypes.data)
+            return out_s, out_i
         qc = Qr @ self.cent.T  # query x bucket-centre scores, one matrix product
         _rerank(Qr, I, qc, self.assign, self.codes, L,
                 self.books[0].C, scales, k, out_s, out_i)

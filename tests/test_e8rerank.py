@@ -59,3 +59,22 @@ def test_index_recall_on_clustered_data():
     assert recall(I) > recall(I0) + 0.2, (recall(I), recall(I0))
     assert recall(I) > 0.85, recall(I)
     assert ix.bytes_per_vector()["recheck"] == 3 * 8 * 2 + 2
+
+
+def test_c_kernel_matches_numba():
+    import pytest
+    from e8rerank import index as m
+    if m._KERNEL is None:
+        pytest.skip("C kernel not built")
+    rng = np.random.default_rng(3)
+    d, n = 40, 5000  # 40 dims: exercises padding to 40 and 5 blocks
+    X = rng.normal(size=(n, d)).astype(np.float32)
+    X /= np.linalg.norm(X, axis=1, keepdims=True)
+    ix = E8RerankIndex(d, nlist=32, levels=3)
+    ix.train(X)
+    ix.add(X)
+    for L in (1, 2, 3):
+        s_c, i_c = ix.search(X[:50], k=10, nprobe=8, k1=100, levels=L, use_c=True)
+        s_n, i_n = ix.search(X[:50], k=10, nprobe=8, k1=100, levels=L, use_c=False)
+        assert np.allclose(s_c, s_n, atol=1e-4)
+        assert np.mean(i_c == i_n) > 0.99

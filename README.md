@@ -56,24 +56,35 @@ inner product.
 
 ### This package, end to end (`benchmarks/glove.py`)
 
-Same first pass (35.8 bytes/vector), 300 candidates, 2,000 queries. The
-QPS numbers are single-thread queries per second on a cloud VM, so treat
-them as rough.
+Same first pass (35.8 bytes/vector), 300 candidates, 2,000 queries. QPS is
+single-thread queries per second on a 4-vCPU cloud VM (best of 3 runs). Treat
+differences under ~10% as noise.
 
-| Re-check code | Re-check bytes | Recall @ 64 buckets | QPS | Recall @ 256 buckets | QPS | Build |
-|---|---|---|---|---|---|---|
-| **E8 ×2, score-aware** | 54 | **0.797** | 2,737 | **0.859** | 1,698 | 15 min (all levels) |
-| FAISS PQ 8-bit (`IndexRefine`) | 50 | 0.744 | 4,347 | 0.798 | 2,784 | 4 s |
-| **E8 ×3, score-aware** | 80 | 0.839 | 2,451 | 0.911 | 1,469 | (same build) |
-| FAISS SQ8 (`IndexRefine`) | 100 | 0.847 | 3,536 | 0.924 | 2,024 | <1 s |
+| Re-check code | Re-check bytes | Recall @ 64 buckets | QPS | Recall @ 256 buckets | QPS |
+|---|---|---|---|---|---|
+| *first pass alone, 300 candidates* | – | – | 4,741 | – | 3,419 |
+| **E8 ×2, score-aware (C++ kernel)** | 54 | **0.797** | 4,863 | **0.859** | 2,832 |
+| FAISS PQ 8-bit (`IndexRefine`) | 50 | 0.744 | 5,385 | 0.798 | 2,768 |
+| **E8 ×3, score-aware (C++ kernel)** | 80 | 0.839 | 4,774 | 0.911 | 2,695 |
+| FAISS SQ8 (`IndexRefine`) | 100 | 0.847 | 4,228 | 0.924 | 2,563 |
+| E8 ×3, numba fallback | 80 | 0.839 | 2,949 | 0.911 | 2,182 |
 
-- **Recall:** the package reproduces the verification race to within half a
-  point (0.859 vs 0.858; 0.911 vs 0.915).
-- **Speed:** FAISS's C++ refine kernels are currently faster than this
-  package's numba re-check, so **this release wins on recall per byte, not
-  on queries per second.**
-- **Against SQ8:** E8 ×3 uses 20% less re-check memory for 1.3 points less
-  recall.
+- **Speed:** with the C++ kernel, the E8 re-check costs about as much as
+  FAISS's own refine step. Almost all search time is spent in the shared
+  first pass.
+- **Against PQ 8-bit:** same speed, about the same memory, and **+5 to +6
+  recall points**.
+- **Against SQ8:** same speed, 20% less re-check memory, 0.8 to 1.3 points
+  less recall.
+- **Recall** reproduces the verification race to within half a point
+  (0.859 vs 0.858; 0.911 vs 0.915).
+- **Build time:** score-aware E8 encoding of 1.2M vectors takes ~15–18
+  minutes on 4 cores, for all 3 levels. FAISS PQ/SQ8 take seconds.
+
+The C++ kernel stores the 65,536 E8 points as int8 at double size, so the
+table is 512 KB and stays in cache. One 8-number E8 block fills exactly one
+256-bit SIMD register. If the kernel can't be compiled at install time, the
+package falls back to numba automatically.
 
 ## Install and use
 
@@ -136,10 +147,10 @@ memory with no training.
 - The first pass is FAISS's. Only the re-check stage is new, so the gains
   are capped by how good the candidates are.
 - Encoding is slower than PQ encoding at 8 bits. Score-aware rounding takes
-  ~10–15 minutes for 1.2M vectors on 4 cores, though that is faster than
+  ~15–18 minutes for 1.2M vectors on 4 cores, though that is faster than
   training a 12-bit PQ.
-- Re-check speed in this package is a straightforward numba loop.
-  Table-lookup kernels in C would be faster.
+- The C++ kernel is compiled with `-march=native` at install time; wheels
+  for other machines would need generic builds.
 
 ## Credits
 

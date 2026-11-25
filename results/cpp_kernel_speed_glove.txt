@@ -1,0 +1,15 @@
+GloVe-100, 2000 queries, k1=300, single thread, best of 3 (4-vCPU cloud VM), 2026-11-25
+first pass only (k1=300)       0 B  np64   recall nan  QPS    4741
+E8 x2 C++                     54 B  np64   recall 0.797  QPS    4863
+E8 x2 numba                   54 B  np64   recall 0.797  QPS    3304
+E8 x3 C++                     80 B  np64   recall 0.839  QPS    4774
+E8 x3 numba                   80 B  np64   recall 0.839  QPS    2949
+first pass only (k1=300)       0 B  np256  recall nan  QPS    3419
+E8 x2 C++                     54 B  np256  recall 0.859  QPS    2832
+E8 x2 numba                   54 B  np256  recall 0.859  QPS    2195
+E8 x3 C++                     80 B  np256  recall 0.911  QPS    2695
+E8 x3 numba                   80 B  np256  recall 0.911  QPS    2182
+FAISS PQ 8-bit                50 B  np64   recall 0.744  QPS    5385
+FAISS PQ 8-bit                50 B  np256  recall 0.798  QPS    2768
+FAISS SQ8                    100 B  np64   recall 0.847  QPS    4228
+FAISS SQ8                    100 B  np256  recall 0.924  QPS    2563
