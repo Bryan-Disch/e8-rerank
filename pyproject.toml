@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "e8-rerank"
+version = "0.1.0"
+description = "E8 lattice re-check codes for approximate nearest-neighbour search, on top of FAISS"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.22", "numba>=0.57", "faiss-cpu>=1.7.4"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools]
+packages = ["e8rerank"]

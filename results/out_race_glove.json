@@ -1,0 +1,291 @@
+{
+ "dataset": "glove",
+ "fs_bytes": 35.793286771428136,
+ "codes": {
+  "E8 ball x2": {
+   "bytes": 54.0,
+   "rows": [
+    {
+     "nprobe": 64,
+     "K1": 300,
+     "recall": 0.76835
+    },
+    {
+     "nprobe": 256,
+     "K1": 300,
+     "recall": 0.82375
+    }
+   ]
+  },
+  "E8 ball x3": {
+   "bytes": 80.0,
+   "rows": [
+    {
+     "nprobe": 64,
+     "K1": 300,
+     "recall": 0.82015
+    },
+    {
+     "nprobe": 256,
+     "K1": 300,
+     "recall": 0.8888000000000001
+    }
+   ]
+  },
+  "E8 score-aware x2": {
+   "bytes": 54.0,
+   "rows": [
+    {
+     "nprobe": 64,
+     "K1": 300,
+     "recall": 0.79605
+    },
+    {
+     "nprobe": 256,
+     "K1": 300,
+     "recall": 0.8580000000000001
+    }
+   ]
+  },
+  "E8 score-aware x3": {
+   "bytes": 80.0,
+   "rows": [
+    {
+     "nprobe": 64,
+     "K1": 300,
+     "recall": 0.8397
+    },
+    {
+     "nprobe": 256,
+     "K1": 300,
+     "recall": 0.9148000000000001
+    }
+   ]
+  },
+  "Barnes-Wall 16 x2": {
+   "bytes": 54.0,
+   "rows": [
+    {
+     "nprobe": 64,
+     "K1": 300,
+     "recall": 0.7719000000000001
+    },
+    {
+     "nprobe": 256,
+     "K1": 300,
+     "recall": 0.8283500000000001
+    }
+   ]
+  },
+  "Barnes-Wall 16 x3": {
+   "bytes": 80.0,
+   "rows": [
+    {
+     "nprobe": 64,
+     "K1": 300,
+     "recall": 0.8247000000000001
+    },
+    {
+     "nprobe": 256,
+     "K1": 300,
+     "recall": 0.8953500000000001
+    }
+   ]
+  },
+  "trellis (TCQ 8-state) x2": {
+   "bytes": 54.0,
+   "rows": [
+    {
+     "nprobe": 64,
+     "K1": 300,
+     "recall": 0.77075
+    },
+    {
+     "nprobe": 256,
+     "K1": 300,
+     "recall": 0.8267
+    }
+   ]
+  },
+  "trellis (TCQ 8-state) x3": {
+   "bytes": 80.0,
+   "rows": [
+    {
+     "nprobe": 64,
+     "K1": 300,
+     "recall": 0.8207500000000001
+    },
+    {
+     "nprobe": 256,
+     "K1": 300,
+     "recall": 0.8890500000000002
+    }
+   ]
+  },
+  "FAISS PQ50": {
+   "bytes": 50,
+   "rows": [
+    {
+     "nprobe": 64,
+     "K1": 300,
+     "recall": 0.7435499999999999
+    },
+    {
+     "nprobe": 256,
+     "K1": 300,
+     "recall": 0.79725
+    }
+   ]
+  },
+  "FAISS PQ50x12": {
+   "bytes": 75,
+   "rows": [
+    {
+     "nprobe": 64,
+     "K1": 300,
+     "recall": 0.8217500000000001
+    },
+    {
+     "nprobe": 256,
+     "K1": 300,
+     "recall": 0.8954000000000001
+    }
+   ]
+  },
+  "FAISS PRQ25x2x8": {
+   "bytes": 50,
+   "rows": [
+    {
+     "nprobe": 64,
+     "K1": 300,
+     "recall": 0.7555
+    },
+    {
+     "nprobe": 256,
+     "K1": 300,
+     "recall": 0.8102500000000001
+    }
+   ]
+  },
+  "FAISS PRQ25x3x8": {
+   "bytes": 75,
+   "rows": [
+    {
+     "nprobe": 64,
+     "K1": 300,
+     "recall": 0.83015
+    },
+    {
+     "nprobe": 256,
+     "K1": 300,
+     "recall": 0.9039500000000001
+    }
+   ]
+  },
+  "FAISS PLSQ25x2x8": {
+   "bytes": 50,
+   "rows": [
+    {
+     "nprobe": 64,
+     "K1": 300,
+     "recall": 0.696
+    },
+    {
+     "nprobe": 256,
+     "K1": 300,
+     "recall": 0.7413500000000002
+    }
+   ]
+  },
+  "FAISS PLSQ25x3x8": {
+   "bytes": 75,
+   "rows": [
+    {
+     "nprobe": 64,
+     "K1": 300,
+     "recall": 0.7523000000000001
+    },
+    {
+     "nprobe": 256,
+     "K1": 300,
+     "recall": 0.80805
+    }
+   ]
+  },
+  "FAISS RQ50x8": {
+   "bytes": 50,
+   "rows": [
+    {
+     "nprobe": 64,
+     "K1": 300,
+     "recall": 0.7587500000000001
+    },
+    {
+     "nprobe": 256,
+     "K1": 300,
+     "recall": 0.81135
+    }
+   ]
+  },
+  "FAISS SQ6": {
+   "bytes": 75,
+   "rows": [
+    {
+     "nprobe": 64,
+     "K1": 300,
+     "recall": 0.8164000000000001
+    },
+    {
+     "nprobe": 256,
+     "K1": 300,
+     "recall": 0.8863000000000002
+    }
+   ]
+  },
+  "FAISS SQ8": {
+   "bytes": 100,
+   "rows": [
+    {
+     "nprobe": 64,
+     "K1": 300,
+     "recall": 0.8483000000000002
+    },
+    {
+     "nprobe": 256,
+     "K1": 300,
+     "recall": 0.9277000000000001
+    }
+   ]
+  },
+  "FAISS PQ50x8 score-aware": {
+   "bytes": 50.0,
+   "rows": [
+    {
+     "nprobe": 64,
+     "K1": 300,
+     "recall": 0.7792500000000001
+    },
+    {
+     "nprobe": 256,
+     "K1": 300,
+     "recall": 0.8393
+    }
+   ]
+  },
+  "FAISS PQ50x12 score-aware": {
+   "bytes": 75.0,
+   "rows": [
+    {
+     "nprobe": 64,
+     "K1": 300,
+     "recall": 0.83645
+    },
+    {
+     "nprobe": 256,
+     "K1": 300,
+     "recall": 0.9125500000000002
+    }
+   ]
+  }
+ }
+}

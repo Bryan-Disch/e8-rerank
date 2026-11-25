@@ -1,0 +1,13 @@
+GloVe-100: 1183514 vectors, 2000 queries, recall@10, k1=300 candidates
+
+re-check code             bytes nprobe  recall     QPS  build s
+E8 x2 score-aware            54     64   0.797    2737      892
+E8 x2 score-aware            54    256   0.859    1698      892
+E8 x3 score-aware            80     64   0.839    2451      892
+E8 x3 score-aware            80    256   0.911    1469      892
+FAISS PQ 8-bit               50     64   0.744    4347        4
+FAISS PQ 8-bit               50    256   0.798    2784        4
+FAISS SQ8                   100     64   0.847    3536        0
+FAISS SQ8                   100    256   0.924    2024        0
+
+First pass (shared by all rows): 35.8 bytes/vector.

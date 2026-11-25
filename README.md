@@ -1,0 +1,147 @@
+# e8-rerank
+
+**E8 lattice re-check codes for approximate nearest-neighbour search.**
+
+Vector search engines usually work in two passes. A fast first pass finds a
+few hundred rough candidates, and a re-check pass re-scores them using a
+more accurate compressed copy of each vector. This repository replaces the
+usual re-check copy (FAISS product quantization, residual/additive
+quantizers or 8-bit scalar codes) with codes built from the **E8 lattice**,
+the densest sphere packing in 8 dimensions.
+
+E8 codes need **no codebook training**. Only one scale number per level is
+fitted. Combined with score-aware rounding (the anisotropic loss from
+ScaNN), they gave higher recall than every FAISS re-check code we tested at
+the same memory, on two datasets.
+
+## Results
+
+### Verification race (exact re-scoring of the same candidates)
+
+Every method re-scores the **same** candidates: the top 300 from a FAISS
+`IVF4096,PQ{d/2}x4fs` fast-scan first pass, searching 256 of 4096 buckets.
+The numbers are recall@10. Memory is the re-check code per vector, plus 2
+bytes for the bucket id on the E8 rows.
+
+| Re-check code | GloVe-100, ~50 B | GloVe-100, ~75 B | fastText-300, ~150 B | fastText-300, ~225 B |
+|---|---|---|---|---|
+| **E8, score-aware** (no training) | **0.858** (54 B) | **0.915** (80 B) | **0.924** (154 B) | **0.957** (230 B) |
+| FAISS PQ, score-aware (trained, 8/12-bit) | 0.839 | 0.913 | 0.904 | 0.950 |
+| FAISS PRQ (additive) | 0.810 | 0.904 | 0.866 | 0.942 |
+| FAISS RQ (additive) | 0.811 | – | – | – |
+| FAISS LSQ (additive, PLSQ) | 0.741 | 0.808 | – | – |
+| FAISS PQ (plain) | 0.797 | 0.895 | 0.848 | 0.930 |
+| FAISS SQ6 | – | 0.886 | – | 0.918 |
+| FAISS SQ8 | 0.928 at 100 B | | 0.960 at 300 B | |
+
+- **Small memory:** E8 leads the strongest FAISS code by about 2 recall
+  points on both datasets. That rival is PQ given the same score-aware
+  rounding.
+- **Larger memory:** a tie. E8 is 0.2 to 0.7 points ahead but uses 5 more
+  bytes per vector. The score-aware 12-bit PQ took 25 minutes (GloVe) and
+  66 minutes (fastText) to train and encode.
+- **Bigger lattices did not help.** The Barnes–Wall 16 lattice and an
+  8-state trellis code reduce error by only ~0.1–0.2 dB, and their recall
+  was the same or worse than plain E8.
+
+Raw outputs: [`results/`](results/).
+
+Datasets:
+- **GloVe-Twitter-100:** 1,183,514 vectors. It's the source of
+  ann-benchmarks' `glove-100-angular`.
+- **fastText wiki-news-300:** 989,999 vectors.
+
+Both use 10,000 held-out queries (2,000 used for timing), unit-normalised,
+inner product.
+
+### This package, end to end (`benchmarks/glove.py`)
+
+Same first pass (35.8 bytes/vector), 300 candidates, 2,000 queries. The
+QPS numbers are single-thread queries per second on a cloud VM, so treat
+them as rough.
+
+| Re-check code | Re-check bytes | Recall @ 64 buckets | QPS | Recall @ 256 buckets | QPS | Build |
+|---|---|---|---|---|---|---|
+| **E8 ×2, score-aware** | 54 | **0.797** | 2,737 | **0.859** | 1,698 | 15 min (all levels) |
+| FAISS PQ 8-bit (`IndexRefine`) | 50 | 0.744 | 4,347 | 0.798 | 2,784 | 4 s |
+| **E8 ×3, score-aware** | 80 | 0.839 | 2,451 | 0.911 | 1,469 | (same build) |
+| FAISS SQ8 (`IndexRefine`) | 100 | 0.847 | 3,536 | 0.924 | 2,024 | <1 s |
+
+- **Recall:** the package reproduces the verification race to within half a
+  point (0.859 vs 0.858; 0.911 vs 0.915).
+- **Speed:** FAISS's C++ refine kernels are currently faster than this
+  package's numba re-check, so **this release wins on recall per byte, not
+  on queries per second.**
+- **Against SQ8:** E8 ×3 uses 20% less re-check memory for 1.3 points less
+  recall.
+
+## Install and use
+
+```bash
+pip install git+https://github.com/Bryan-Disch/e8-rerank
+```
+
+```python
+import numpy as np
+from e8rerank import E8RerankIndex
+
+X = np.load("vectors.npy").astype("float32")   # (n, d); normalise for cosine
+index = E8RerankIndex(d=X.shape[1], nlist=4096, levels=2)
+index.train(X)
+index.add(X)
+scores, ids = index.search(queries, k=10, nprobe=64, k1=300)
+print(index.bytes_per_vector())
+```
+
+Run the tests with `pytest tests`. Reproduce the GloVe table with
+`python benchmarks/glove.py`, which downloads ~390 MB on first run.
+
+## How it works
+
+1. **Buckets.** k-means splits the data into `nlist` buckets. Each vector is
+   stored relative to its bucket centre (its *residual*) after a fixed
+   random rotation that spreads information evenly over the dimensions.
+2. **E8 rounding.** The residual is cut into pieces of 8 numbers. Each piece
+   is rounded to one of the 65,536 E8 lattice points closest to the origin,
+   so it costs 16 bits. The nearest E8 point is found with the
+   Conway–Sloane decoder and a lookup table, with no search over a trained
+   codebook. Each extra level encodes what the previous levels missed.
+3. **Score-aware rounding.** For inner-product search, error *along* a
+   vector's own direction changes its scores more than sideways error.
+   Each piece is therefore re-rounded among the current E8 point and its
+   240 neighbours to minimise
+   `|error|² + (η − 1)·(error · x̂)²` with η = 4 (ScaNN's anisotropic loss).
+4. **Search.** FAISS fast-scan returns `k1` candidates. Each is re-scored as
+   `q·centre + Σ_levels scale · q·E8point`, and the top `k` are returned.
+
+## What is and isn't new
+
+None of the ingredients is new on its own:
+- E8 lattice quantization for search (Jégou et al., 2008),
+- E8 codebooks with fast decoding (QuIP#, 2024),
+- the anisotropic loss (ScaNN, Guo et al., 2020),
+- fast-scan PQ (André et al.; FAISS).
+
+As far as we know, the new part is **using E8 codes as the re-check
+stage behind a fast-scan first pass, with score-aware rounding over E8's
+240 neighbours**. Benchmarked against FAISS's full family of re-check codes
+(PQ, residual, LSQ, scalar), this gives better recall at small
+memory with no training.
+
+## Caveats
+
+- Two datasets, both word embeddings (100-d and 300-d). Modern
+  text-embedding models (768–1536-d) and SIFT-style image features are
+  untested.
+- The first pass is FAISS's. Only the re-check stage is new, so the gains
+  are capped by how good the candidates are.
+- Encoding is slower than PQ encoding at 8 bits. Score-aware rounding takes
+  ~10–15 minutes for 1.2M vectors on 4 cores, though that is faster than
+  training a 12-bit PQ.
+- Re-check speed in this package is a straightforward numba loop.
+  Table-lookup kernels in C would be faster.
+
+## Credits
+
+The ideas and the research direction are Bryan Disch's. The implementation
+and benchmarks were built with Claude (Anthropic). MIT licence.
