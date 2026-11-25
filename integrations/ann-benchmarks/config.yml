@@ -1,0 +1,12 @@
+float:
+  angular:
+  - base_args: ['@metric']
+    constructor: E8Rerank
+    disabled: false
+    docker_tag: ann-benchmarks-e8rerank
+    module: ann_benchmarks.algorithms.e8rerank
+    name: e8rerank
+    run_groups:
+      base:
+        args: [[4096], [3]]
+        query_args: [[16, 32, 64, 128, 256, 512, 1024], [100, 300, 1000], [2, 3]]

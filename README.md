@@ -86,6 +86,31 @@ table is 512 KB and stays in cache. One 8-number E8 block fills exactly one
 256-bit SIMD register. If the kernel can't be compiled at install time, the
 package falls back to numba automatically.
 
+### ann-benchmarks harness (glove-100-angular, one query at a time)
+
+The wrapper is in [`integrations/ann-benchmarks/`](integrations/ann-benchmarks/).
+It was run with ann-benchmarks' own harness (`run.py --local`, one CPU core,
+2 runs, best kept). The dataset was rebuilt with ann-benchmarks' own split
+from the same GloVe-Twitter vectors, because the ann-benchmarks.com download
+is blocked from the machine we used.
+
+![recall vs QPS](results/ann_benchmarks_glove100.png)
+
+| Method | Memory/vector (measured) | QPS at recall ≥ 0.90 | QPS at recall ≥ 0.95 |
+|---|---|---|---|
+| e8-rerank (E8 ×3) | **257 B** | 2,039 | 1,147 |
+| FAISS fast-scan + full-float re-check (`faiss-ivfpqfs`) | 473 B | **2,740** | **1,903** |
+| hnswlib (M = 16 / 36) | 608–812 B | 1,875 | 765 |
+
+Honest reading:
+- **On ann-benchmarks' main chart (recall vs speed), FAISS's fast-scan
+  entry is faster.** It re-checks with the full original floats, which
+  costs about 1.8× our memory.
+- **We match or beat hnswlib** from 0.90 recall up, using a third to a
+  half of its memory.
+- e8-rerank's advantage is **memory**, which ann-benchmarks plots only as
+  a secondary chart.
+
 ## Install and use
 
 ```bash

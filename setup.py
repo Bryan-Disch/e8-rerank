@@ -5,9 +5,8 @@ from setuptools import setup, Extension
 
 args = ["-O3", "-march=native", "-std=c++17"]
 link = []
-if sys.platform.startswith("linux"):
-    args.append("-fopenmp")
-    link.append("-fopenmp")
+# No OpenMP: FAISS ships its own OpenMP runtime, and mixing two runtimes made
+# single-query calls ~2x slower. Batch callers can split queries across threads.
 
 setup(ext_modules=[Extension("e8rerank._kernel", ["e8rerank/_kernel.cpp"], language="c++",
                              extra_compile_args=args, extra_link_args=link,

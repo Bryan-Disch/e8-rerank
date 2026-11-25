@@ -29,7 +29,6 @@ extern "C" void e8_rerank(int nq, int k1, int D, int L, int Lstride, int NB,
                const float *half_scales, int k,
                float *out_s, int64_t *out_i)
 {
-    #pragma omp parallel for schedule(dynamic, 16)
     for (int qi = 0; qi < nq; qi++) {
         const float *q = Q + (int64_t)qi * D;
         const int64_t *cand = I + (int64_t)qi * k1;
@@ -37,6 +36,11 @@ extern "C" void e8_rerank(int nq, int k1, int D, int L, int Lstride, int NB,
         int64_t *bi = out_i + (int64_t)qi * k;
         for (int j = 0; j < k; j++) { bs[j] = -FLT_MAX; bi[j] = -1; }
         for (int j = 0; j < k1; j++) {
+            if (j + 4 < k1 && cand[j + 4] >= 0) {      /* fetch ahead: rows are random in memory */
+                int64_t w = cand[j + 4];
+                __builtin_prefetch(codes + w * (int64_t)Lstride * NB);
+                __builtin_prefetch(assign + w);
+            }
             int64_t v = cand[j];
             if (v < 0) continue;
             float s = dot_f(q, cent + (int64_t)assign[v] * D, D);
