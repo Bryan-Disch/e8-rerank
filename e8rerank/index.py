@@ -12,40 +12,24 @@ a fixed random rotation. Each level encodes what the previous levels missed.
 Nothing about the codebook is trained: only one scale per level is fitted.
 """
 import numpy as np
-import numba
 import faiss
 
-from .lattice import E8Codebook, score_aware_encode
+from .lattice import E8Codebook, clear_neighbours, score_aware_encode
+from ._native import KERNEL as _KERNEL
+
+
+def _return_free_memory():
+    """Hand freed build buffers back to the OS (glibc only; no-op elsewhere)."""
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
 
 
 def _rotation(D, seed):
     q, r = np.linalg.qr(np.random.default_rng(seed).normal(size=(D, D)))
     return (q * np.sign(np.diag(r))).astype(np.float32)
-
-
-@numba.njit(parallel=True, cache=True)
-def _rerank(Q, I, qc, assign, codes, L, C, scales, k, out_s, out_i):
-    nq, k1 = I.shape
-    NB = codes.shape[2]
-    for qi in numba.prange(nq):
-        sc = np.full(k1, -np.inf, dtype=np.float32)
-        for j in range(k1):
-            v = I[qi, j]
-            if v < 0:
-                continue
-            s = qc[qi, assign[v]]
-            for lv in range(L):
-                sl = 0.0
-                for b in range(NB):
-                    w = codes[v, lv, b]
-                    for t in range(8):
-                        sl += Q[qi, 8 * b + t] * C[w, t]
-                s += scales[lv] * sl
-            sc[j] = s
-        order = np.argsort(-sc)[:k]
-        for j in range(k):
-            out_s[qi, j] = sc[order[j]]
-            out_i[qi, j] = I[qi, order[j]]
 
 
 class E8RerankIndex:
@@ -69,7 +53,8 @@ class E8RerankIndex:
         self.R = _rotation(self.D, seed)
         m = d // 2 if d % 2 == 0 else d
         self.first = faiss.index_factory(d, f"IVF{nlist},PQ{m}x4fs", faiss.METRIC_INNER_PRODUCT)
-        self.books = [E8Codebook() for _ in range(levels)]
+        book = E8Codebook()
+        self.books = [book.with_scale() for _ in range(levels)]
         self.codes = np.zeros((0, levels, self.D // 8), np.uint16)
         self.assign = np.zeros(0, np.int32)
 
@@ -121,10 +106,14 @@ class E8RerankIndex:
             r = r - book.decode(c)
         self.codes = np.concatenate([self.codes, new])
         self.assign = np.concatenate([self.assign, a])
+        clear_neighbours()  # 63 MB build-time table; not needed for search
+        _return_free_memory()
 
-    def search(self, Q, k=10, nprobe=64, k1=300, levels=None):
+    def search(self, Q, k=10, nprobe=64, k1=300, levels=None, use_c=True, k2=0):
         """Returns (scores, ids), each of shape (len(Q), k).
-        ``levels`` < self.levels re-checks with only the first few levels."""
+        ``levels`` < self.levels re-checks with only the first few levels.
+        ``k2`` > 0 (C++ kernel only): score all k1 candidates with level 1,
+        then apply the remaining levels to the best k2 only."""
         L = self.levels if levels is None else levels
         Q = np.ascontiguousarray(Q, np.float32)
         self.first.nprobe = nprobe
@@ -133,6 +122,19 @@ class E8RerankIndex:
         out_i = np.empty((len(Q), k), np.int64)
         scales = np.array([b.scale for b in self.books], np.float32)
         Qr = self._rot(Q)
+        if _KERNEL is not None and use_c:
+            if getattr(self, "_C2", None) is None:
+                # E8 points doubled are integers in -8..7: an int8 table, 512 KB
+                self._C2 = np.ascontiguousarray(np.round(self.books[0].C * 2), np.int8)
+            half = (scales / 2).astype(np.float32)
+            I = np.ascontiguousarray(I, np.int64)
+            _KERNEL.e8_rerank(len(Q), I.shape[1], self.D, L, self.levels, self.D // 8,
+                              Qr.ctypes.data, I.ctypes.data, self.cent.ctypes.data,
+                              self.assign.ctypes.data, self.codes.ctypes.data,
+                              self._C2.ctypes.data, half.ctypes.data, k, k2,
+                              out_s.ctypes.data, out_i.ctypes.data)
+            return out_s, out_i
+        from ._numba_impl import _rerank
         qc = Qr @ self.cent.T  # query x bucket-centre scores, one matrix product
         _rerank(Qr, I, qc, self.assign, self.codes, L,
                 self.books[0].C, scales, k, out_s, out_i)

@@ -1,6 +1,7 @@
 # e8-rerank
 
-**E8 lattice re-check codes for approximate nearest-neighbour search.**
+**The most accurate vector re-check codes we know of at tight memory budgets
+(about 50–100 bytes per vector), built from the E8 lattice. No training.**
 
 Vector search engines usually work in two passes. A fast first pass finds a
 few hundred rough candidates, and a re-check pass re-scores them using a
@@ -13,6 +14,19 @@ E8 codes need **no codebook training**. Only one scale number per level is
 fitted. Combined with score-aware rounding (the anisotropic loss from
 ScaNN), they gave higher recall than every FAISS re-check code we tested at
 the same memory, on two datasets.
+
+## When to use it
+
+| Your situation | Use |
+|---|---|
+| Memory is tight: ~50–100 bytes per vector for the re-check copy | **e8-rerank**: 2–6 recall points above FAISS PQ/additive codes at the same size |
+| Need a graph index's speed with a third of its memory | **e8-rerank**: matches hnswlib from 90% recall up |
+| Memory is plentiful (~130+ bytes per vector) and raw speed matters most | FAISS SQ8 or full-float re-check: simpler and faster |
+
+Raw speed is not where e8-rerank wins. Decoding an E8 code needs a small
+table lookup for every 8 numbers, while FAISS's 8-bit and float re-checks
+stream plain numbers. Above ~130 bytes per vector, FAISS SQ8 matches or
+beats E8.
 
 ## Results
 
@@ -56,24 +70,65 @@ inner product.
 
 ### This package, end to end (`benchmarks/glove.py`)
 
-Same first pass (35.8 bytes/vector), 300 candidates, 2,000 queries. The
-QPS numbers are single-thread queries per second on a cloud VM, so treat
-them as rough.
+Same first pass (35.8 bytes/vector), 300 candidates, 2,000 queries. QPS is
+single-thread queries per second on a 4-vCPU cloud VM (best of 3 runs). Treat
+differences under ~10% as noise.
 
-| Re-check code | Re-check bytes | Recall @ 64 buckets | QPS | Recall @ 256 buckets | QPS | Build |
-|---|---|---|---|---|---|---|
-| **E8 ×2, score-aware** | 54 | **0.797** | 2,737 | **0.859** | 1,698 | 15 min (all levels) |
-| FAISS PQ 8-bit (`IndexRefine`) | 50 | 0.744 | 4,347 | 0.798 | 2,784 | 4 s |
-| **E8 ×3, score-aware** | 80 | 0.839 | 2,451 | 0.911 | 1,469 | (same build) |
-| FAISS SQ8 (`IndexRefine`) | 100 | 0.847 | 3,536 | 0.924 | 2,024 | <1 s |
+| Re-check code | Re-check bytes | Recall @ 64 buckets | QPS | Recall @ 256 buckets | QPS |
+|---|---|---|---|---|---|
+| *first pass alone, 300 candidates* | – | – | 4,741 | – | 3,419 |
+| **E8 ×2, score-aware (C++ kernel)** | 54 | **0.797** | 4,863 | **0.859** | 2,832 |
+| FAISS PQ 8-bit (`IndexRefine`) | 50 | 0.744 | 5,385 | 0.798 | 2,768 |
+| **E8 ×3, score-aware (C++ kernel)** | 80 | 0.839 | 4,774 | 0.911 | 2,695 |
+| FAISS SQ8 (`IndexRefine`) | 100 | 0.847 | 4,228 | 0.924 | 2,563 |
+| E8 ×3, numba fallback | 80 | 0.839 | 2,949 | 0.911 | 2,182 |
 
-- **Recall:** the package reproduces the verification race to within half a
-  point (0.859 vs 0.858; 0.911 vs 0.915).
-- **Speed:** FAISS's C++ refine kernels are currently faster than this
-  package's numba re-check, so **this release wins on recall per byte, not
-  on queries per second.**
-- **Against SQ8:** E8 ×3 uses 20% less re-check memory for 1.3 points less
-  recall.
+- **Speed:** with the C++ kernel, the E8 re-check costs about as much as
+  FAISS's own refine step. Almost all search time is spent in the shared
+  first pass.
+- **Against PQ 8-bit:** same speed, about the same memory, and **+5 to +6
+  recall points**.
+- **Against SQ8:** same speed, 20% less re-check memory, 0.8 to 1.3 points
+  less recall.
+- **Recall** reproduces the verification race to within half a point
+  (0.859 vs 0.858; 0.911 vs 0.915).
+- **Build time:** about 3 minutes for 1.2M vectors on 4 cores (4 levels,
+  score-aware, C++). FAISS PQ/SQ8 take seconds.
+
+The C++ kernel stores the 65,536 E8 points as int8 at double size, so the
+table is 512 KB and stays in cache. One 8-number E8 block fills exactly one
+256-bit SIMD register. If the kernel can't be compiled at install time, the
+package falls back to numba automatically. `search(..., k2=50)` turns on a
+two-step re-check: all candidates get level 1, and only the best `k2` get
+the remaining levels, which is 10–25% faster at nearly the same recall.
+
+### ann-benchmarks harness (glove-100-angular, one query at a time)
+
+The wrapper is in [`integrations/ann-benchmarks/`](integrations/ann-benchmarks/).
+It was run with ann-benchmarks' own harness (`run.py --local`, one CPU core,
+2 runs, best kept). The dataset was rebuilt with ann-benchmarks' own split
+from the same GloVe-Twitter vectors, because the ann-benchmarks.com download
+is blocked from the machine we used.
+
+![recall vs QPS](results/ann_benchmarks_glove100.png)
+
+| Method | Memory/vector (measured) | QPS at recall ≥ 0.90 | QPS at recall ≥ 0.95 |
+|---|---|---|---|
+| e8-rerank (E8 ×3) | **257 B**¹ | 2,039 | 1,147 |
+| FAISS fast-scan + full-float re-check (`faiss-ivfpqfs`) | 473 B | **2,740** | **1,903** |
+| hnswlib (M = 16 / 36) | 608–812 B | 1,875 | 765 |
+
+¹ Measured before build-memory cleanup. The current version measures ~211 B
+for 4 levels; the stored index itself is ~142 B.
+
+Honest reading:
+- **On ann-benchmarks' main chart (recall vs speed), FAISS's fast-scan
+  entry is faster.** It re-checks with the full original floats, which
+  costs about 1.8× our memory.
+- **We match or beat hnswlib** from 0.90 recall up, using a third to a
+  half of its memory.
+- e8-rerank's advantage is **memory**, which ann-benchmarks plots only as
+  a secondary chart.
 
 ## Install and use
 
@@ -135,11 +190,13 @@ memory with no training.
   untested.
 - The first pass is FAISS's. Only the re-check stage is new, so the gains
   are capped by how good the candidates are.
-- Encoding is slower than PQ encoding at 8 bits. Score-aware rounding takes
-  ~10–15 minutes for 1.2M vectors on 4 cores, though that is faster than
-  training a 12-bit PQ.
-- Re-check speed in this package is a straightforward numba loop.
-  Table-lookup kernels in C would be faster.
+- Not the fastest. At 90% recall on one core, FAISS's full-float re-check
+  is ~1.5× faster (with ~3× the memory) and SQ8 is ~1.1× faster at similar
+  memory. Score-aware first-pass codes and more E8 levels did not close
+  that gap. The table lookups in decoding are the limit.
+- Building is slower than FAISS PQ/SQ8 (minutes vs seconds).
+- The C++ kernel is compiled with `-march=native` at install time; wheels
+  for other machines would need generic builds.
 
 ## Credits
 
