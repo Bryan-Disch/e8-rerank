@@ -78,3 +78,28 @@ def test_c_kernel_matches_numba():
         s_n, i_n = ix.search(X[:50], k=10, nprobe=8, k1=100, levels=L, use_c=False)
         assert np.allclose(s_c, s_n, atol=1e-4)
         assert np.mean(i_c == i_n) > 0.99
+
+
+def test_cpp_encoding_matches_numba():
+    import pytest
+    from e8rerank import lattice, _native
+    if _native.KERNEL is None:
+        pytest.skip("C++ kernel not built")
+    rng = np.random.default_rng(4)
+    book = E8Codebook()
+    book.scale = 0.1
+    R = (rng.normal(size=(300, 40)) * 0.1).astype(np.float32)
+    X = rng.normal(size=(300, 40)).astype(np.float32)
+    X /= np.linalg.norm(X, axis=1, keepdims=True)
+    c_cpp = book.encode(R)
+    kern = _native.KERNEL
+    try:
+        lattice.KERNEL = None          # force the numba fallback
+        c_nb = book.encode(R)
+        s_nb = lattice.score_aware_encode(book, R, X, c_nb)
+    finally:
+        lattice.KERNEL = kern
+    err = lambda c: ((R - book.decode(c)) ** 2).sum()
+    assert err(c_cpp) <= err(c_nb) * 1.001
+    s_cpp = lattice.score_aware_encode(book, R, X, c_cpp)
+    assert np.mean(s_cpp == s_nb) > 0.99

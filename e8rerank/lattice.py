@@ -13,7 +13,8 @@ This module gives:
     error that changes inner-product scores (ScaNN's anisotropic loss).
 """
 import numpy as np
-import numba
+
+from ._native import KERNEL, THREADS
 
 
 def near_D8(x):
@@ -74,65 +75,19 @@ ROOTS = _p[(_p ** 2).sum(1) > 0].astype(np.float32)  # the 240 shortest vectors
 assert len(ROOTS) == 240
 
 
-@numba.njit(parallel=True, cache=True)
-def _nearest_brute(Y, C):
-    n = len(Y)
-    out = np.empty(n, np.int32)
-    cc = (C ** 2).sum(1)
-    for i in numba.prange(n):
-        best = 1e30
-        bj = 0
-        for j in range(len(C)):
-            d = cc[j]
-            for t in range(8):
-                d -= 2 * Y[i, t] * C[j, t]
-            if d < best:
-                best = d
-                bj = j
-        out[i] = bj
-    return out
-
-
-@numba.njit(parallel=True, cache=True)
-def _descend(Y, idx, C, sk, sv, roots):
-    out = idx.copy()
-    for i in numba.prange(len(Y)):
-        cur = out[i]
-        best = 0.0
-        for t in range(8):
-            best += (Y[i, t] - C[cur, t]) ** 2
-        moved = True
-        while moved:
-            moved = False
-            for j in range(240):
-                key = 0
-                mult = 1
-                ok = True
-                d = 0.0
-                for t in range(8):
-                    v = C[cur, t] + roots[j, t]
-                    k = int(np.round(v * 2)) + 8
-                    if k < 0 or k > 15:
-                        ok = False
-                    key += k * mult
-                    mult *= 16
-                    d += (Y[i, t] - v) ** 2
-                if not ok or d >= best - 1e-9:
-                    continue
-                pos = np.searchsorted(sk, key)
-                if pos < len(sk) and sk[pos] == key:
-                    best = d
-                    cur = sv[pos]
-                    moved = True
-        out[i] = cur
-    return out
-
-
 def _keys(P):
     """Pack doubled coordinates (range -8..7) into one integer key per point."""
     k = np.round(P * 2).astype(np.int64) + 8
     ok = ((k >= 0) & (k < 16)).all(1)
     return np.where(ok, (np.clip(k, 0, 15) * (16 ** np.arange(8))).sum(1), -1)
+
+
+_NBR = {}  # neighbour tables, shared by codebooks with the same points
+
+
+def clear_neighbours():
+    """Free the build-time neighbour tables (63 MB each)."""
+    _NBR.clear()
 
 
 class E8Codebook:
@@ -153,6 +108,15 @@ class E8Codebook:
 
     def encode_blocks(self, Y):
         """Codes for 8-number blocks ``Y`` (already divided by the scale)."""
+        if KERNEL is not None:
+            Y = np.ascontiguousarray(Y, np.float32)
+            out = np.empty(len(Y), np.uint16)
+            r_ball = float(np.sqrt((self.C.astype(np.float64) ** 2).sum(1).max()))
+            KERNEL.e8_encode(len(Y), Y.ctypes.data, self.C.ctypes.data, self.sk.ctypes.data,
+                             self.sv.ctypes.data, len(self.sk), ROOTS.ctypes.data, r_ball,
+                             THREADS, out.ctypes.data)
+            return out.astype(np.int32)
+        from ._numba_impl import _nearest_brute, _descend
         idx = self._lookup(near_E8(Y))
         bad = np.where(idx < 0)[0]
         miss = bad.copy()
@@ -175,6 +139,24 @@ class E8Codebook:
             idx[miss] = _descend(np.ascontiguousarray(Y[miss], np.float32), idx[miss],
                                  self.C, self.sk, self.sv, ROOTS)
         return idx
+
+    def with_scale(self, scale=1.0):
+        """A view sharing this codebook's tables but with its own scale."""
+        import copy
+        b = copy.copy(self)
+        b.scale = scale
+        return b
+
+    def neighbours(self):
+        """(65536, 240) table: index of codeword + each E8 root, or -1 (63 MB,
+        built on first use, C++ kernel only)."""
+        key = id(self.C)
+        if key not in _NBR:
+            nbr = np.empty((len(self.C), 240), np.int32)
+            KERNEL.e8_neighbours(self.C.ctypes.data, self.sk.ctypes.data, self.sv.ctypes.data,
+                                 len(self.sk), ROOTS.ctypes.data, THREADS, nbr.ctypes.data)
+            _NBR[key] = nbr
+        return _NBR[key]
 
     def encode(self, X, chunk=200000):
         """X: (n, D) with D a multiple of 8 -> uint16 codes (n, D // 8)."""
@@ -201,68 +183,20 @@ class E8Codebook:
         return best[0]
 
 
-@numba.njit(parallel=True, cache=True)
-def _score_aware(r, xh, codes, C, s, sk, sv, roots, eta, rounds):
-    n, D = r.shape
-    NB = D // 8
-    out = codes.copy()
-    for i in numba.prange(n):
-        e = np.empty(D, np.float32)
-        for b in range(NB):
-            for t in range(8):
-                e[8 * b + t] = r[i, 8 * b + t] - s * C[out[i, b], t]
-        par = 0.0
-        for t in range(D):
-            par += e[t] * xh[i, t]
-        for rd in range(rounds):
-            for b in range(NB):
-                cur = out[i, b]
-                pb = 0.0
-                for t in range(8):
-                    pb += e[8 * b + t] * xh[i, 8 * b + t]
-                rest = par - pb
-                best = 1e30
-                bidx = cur
-                bpb = pb
-                for j in range(241):  # current point + its 240 neighbours
-                    key = 0
-                    mult = 1
-                    ok = True
-                    nrm = 0.0
-                    pp = 0.0
-                    for t in range(8):
-                        v = C[cur, t] + (roots[j, t] if j < 240 else 0.0)
-                        k = int(np.round(v * 2)) + 8
-                        if k < 0 or k > 15:
-                            ok = False
-                        key += k * mult
-                        mult *= 16
-                        d = r[i, 8 * b + t] - s * v
-                        nrm += d * d
-                        pp += d * xh[i, 8 * b + t]
-                    if not ok:
-                        continue
-                    pos = np.searchsorted(sk, key)
-                    if pos >= len(sk) or sk[pos] != key:
-                        continue
-                    tot = rest + pp
-                    loss = nrm + (eta - 1.0) * tot * tot
-                    if loss < best:
-                        best = loss
-                        bidx = sv[pos]
-                        bpb = pp
-                if bidx != cur:
-                    out[i, b] = bidx
-                    for t in range(8):
-                        e[8 * b + t] = r[i, 8 * b + t] - s * C[bidx, t]
-                    par = rest + bpb
-    return out
-
-
 def score_aware_encode(book, residual, direction, codes, eta=4.0, rounds=2):
     """Improve ``codes`` so that the error along ``direction`` (unit vectors,
     the database vectors themselves) is penalised ``eta`` times more.
     Candidates per block: the current point and its 240 E8 neighbours."""
+    if KERNEL is not None:
+        nbr = book.neighbours()
+        r = np.ascontiguousarray(residual, np.float32)
+        x = np.ascontiguousarray(direction, np.float32)
+        out = np.ascontiguousarray(codes, np.uint16).copy()
+        KERNEL.e8_score_aware(len(r), r.shape[1], r.ctypes.data, x.ctypes.data, out.ctypes.data,
+                              book.C.ctypes.data, float(book.scale), nbr.ctypes.data,
+                              ROOTS.ctypes.data, float(eta), rounds, THREADS)
+        return out
+    from ._numba_impl import _score_aware
     out = _score_aware(np.ascontiguousarray(residual, np.float32),
                        np.ascontiguousarray(direction, np.float32),
                        codes.astype(np.int32), book.C, np.float32(book.scale),
